@@ -498,6 +498,7 @@ WSDL_TYPES = """<types>
     <xsd:all>
         <xsd:element name="HostId" type="na:ObjId"/>
         <xsd:element name="LunPath" type="na:ObjName"/>
+        <xsd:element name="QtreeId" type="na:ObjName"/>
     </xsd:all>
 </xsd:complexType>
 <xsd:simpleType name="ObjId">
@@ -812,6 +813,7 @@ class FakeDfmServerHandler(BaseHTTPServer.BaseHTTPRequestHandler):
                         <na:LunInfo>
                             <na:HostId>0</na:HostId>
                             <na:LunPath>%s</na:LunPath>
+                            <na:QtreeId>volume-00000001</na:QtreeId>
                         </na:LunInfo>
                     </na:Luns>
                     <na:Records>1</na:Records>
@@ -971,6 +973,9 @@ class NetAppDriverTestCase(test.TestCase):
         self.driver._provision(self.VOLUME_NAME, None, self.PROJECT_ID,
                                self.VOLUME_TYPE, self.VOLUME_SIZE)
         self.driver._remove_destroy(self.VOLUME_NAME, self.PROJECT_ID)
+
+    def test_destroy_uncreated_volume(self):
+        self.driver._remove_destroy('fake-nonexistent-volume', self.PROJECT_ID)
 
     def test_map_unmap(self):
         self.driver._discover_luns()
