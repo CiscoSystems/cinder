@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 #
-# Copyright 2013 OpenStack Foundation
+# Copyright 2013 Huawei Technologies Co., Ltd
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -16,27 +16,32 @@
 #    under the License.
 
 """
-Tests for cinder.api.contrib.quotas.py
+Tests for cinder.api.contrib.quota_classes.py
 """
 
 from lxml import etree
 import webob.exc
 
 
-from cinder.api.contrib import quotas
+from cinder.api.contrib import quota_classes
 from cinder import context
-from cinder import db
+from cinder import quota
 from cinder import test
+from cinder.volume import volume_types
+
+
+QUOTAS = quota.QUOTAS
 
 
 def make_body(root=True, gigabytes=1000, snapshots=10,
-              volumes=10, tenant_id='foo'):
+              volumes=10, volume_types_faked=None,
+              tenant_id='foo'):
     resources = {'gigabytes': gigabytes,
                  'snapshots': snapshots,
                  'volumes': volumes}
-    # need to consider preexisting volume types as well
-    volume_types = db.volume_type_get_all(context.get_admin_context())
-    for volume_type in volume_types:
+    if not volume_types_faked:
+        volume_types_faked = {'fake_type': None}
+    for volume_type in volume_types_faked:
         resources['gigabytes_' + volume_type] = -1
         resources['snapshots_' + volume_type] = -1
         resources['volumes_' + volume_type] = -1
@@ -44,27 +49,43 @@ def make_body(root=True, gigabytes=1000, snapshots=10,
     if tenant_id:
         resources['id'] = tenant_id
     if root:
-        result = {'quota_set': resources}
+        result = {'quota_class_set': resources}
     else:
         result = resources
     return result
 
 
-class QuotaSetsControllerTest(test.TestCase):
+def make_response_body(root=True, ctxt=None, quota_class='foo',
+                       request_body=None, tenant_id='foo'):
+    resources = {}
+    if not ctxt:
+        ctxt = context.get_admin_context()
+    resources.update(QUOTAS.get_class_quotas(ctxt, quota_class))
+    if not request_body and not request_body['quota_class_set']:
+        resources.update(request_body['quota_class_set'])
+
+    if tenant_id:
+        resources['id'] = tenant_id
+    if root:
+        result = {'quota_class_set': resources}
+    else:
+        result = resources
+    return result
+
+
+class QuotaClassSetsControllerTest(test.TestCase):
 
     def setUp(self):
-        super(QuotaSetsControllerTest, self).setUp()
-        self.controller = quotas.QuotaSetsController()
+        super(QuotaClassSetsControllerTest, self).setUp()
+        self.controller = quota_classes.QuotaClassSetsController()
 
+        self.ctxt = context.get_admin_context()
         self.req = self.mox.CreateMockAnything()
-        self.req.environ = {'cinder.context': context.get_admin_context()}
+        self.req.environ = {'cinder.context': self.ctxt}
         self.req.environ['cinder.context'].is_admin = True
 
-    def test_defaults(self):
-        result = self.controller.defaults(self.req, 'foo')
-        self.assertDictMatch(result, make_body())
-
     def test_show(self):
+        volume_types.create(self.ctxt, 'fake_type')
         result = self.controller.show(self.req, 'foo')
         self.assertDictMatch(result, make_body())
 
@@ -76,23 +97,25 @@ class QuotaSetsControllerTest(test.TestCase):
                           self.req, 'foo')
 
     def test_update(self):
+        volume_types.create(self.ctxt, 'fake_type')
         body = make_body(gigabytes=2000, snapshots=15,
                          volumes=5, tenant_id=None)
         result = self.controller.update(self.req, 'foo', body)
         self.assertDictMatch(result, body)
 
     def test_update_wrong_key(self):
-        body = {'quota_set': {'bad': 'bad'}}
+        volume_types.create(self.ctxt, 'fake_type')
+        body = {'quota_class_set': {'bad': 'bad'}}
         result = self.controller.update(self.req, 'foo', body)
         self.assertDictMatch(result, make_body(tenant_id=None))
 
     def test_update_invalid_key_value(self):
-        body = {'quota_set': {'gigabytes': "should_be_int"}}
+        body = {'quota_class_set': {'gigabytes': "should_be_int"}}
         self.assertRaises(webob.exc.HTTPBadRequest, self.controller.update,
                           self.req, 'foo', body)
 
     def test_update_bad_quota_limit(self):
-        body = {'quota_set': {'gigabytes': -1000}}
+        body = {'quota_class_set': {'gigabytes': -1000}}
         self.assertRaises(webob.exc.HTTPBadRequest, self.controller.update,
                           self.req, 'foo', body)
 
@@ -101,31 +124,32 @@ class QuotaSetsControllerTest(test.TestCase):
         self.assertRaises(webob.exc.HTTPForbidden, self.controller.update,
                           self.req, 'foo', make_body(tenant_id=None))
 
-    def test_update_without_quota_set_field(self):
-        body = {'fake_quota_set': {'gigabytes': 100}}
-        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.update,
-                          self.req, 'foo', body)
+    def test_update_with_more_volume_types(self):
+        volume_types.create(self.ctxt, 'fake_type_1')
+        volume_types.create(self.ctxt, 'fake_type_2')
+        body = {'quota_class_set': {'gigabytes_fake_type_1': 1111,
+                                    'volumes_fake_type_2': 2222}}
+        result = self.controller.update(self.req, 'foo', body)
+        self.assertDictMatch(result, make_response_body(ctxt=self.ctxt,
+                                                        quota_class='foo',
+                                                        request_body=body,
+                                                        tenant_id=None))
 
-    def test_update_empty_body(self):
-        body = {}
-        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.update,
-                          self.req, 'foo', body)
 
-
-class QuotaSerializerTest(test.TestCase):
+class QuotaClassesSerializerTest(test.TestCase):
 
     def setUp(self):
-        super(QuotaSerializerTest, self).setUp()
+        super(QuotaClassesSerializerTest, self).setUp()
         self.req = self.mox.CreateMockAnything()
         self.req.environ = {'cinder.context': context.get_admin_context()}
 
     def test_update_serializer(self):
-        serializer = quotas.QuotaTemplate()
-        quota_set = make_body(root=False)
-        text = serializer.serialize({'quota_set': quota_set})
+        serializer = quota_classes.QuotaClassTemplate()
+        quota_class_set = make_body(root=False)
+        text = serializer.serialize({'quota_class_set': quota_class_set})
         tree = etree.fromstring(text)
-        self.assertEqual(tree.tag, 'quota_set')
-        self.assertEqual(tree.get('id'), quota_set['id'])
+        self.assertEqual(tree.tag, 'quota_class_set')
+        self.assertEqual(tree.get('id'), quota_class_set['id'])
         body = make_body(root=False, tenant_id=None)
         for node in tree:
             self.assertIn(node.tag, body)

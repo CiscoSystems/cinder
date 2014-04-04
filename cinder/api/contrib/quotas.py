@@ -46,7 +46,7 @@ class QuotaTemplate(xmlutil.TemplateBuilder):
         return xmlutil.MasterTemplate(root, 1)
 
 
-class QuotaSetsController(object):
+class QuotaSetsController(wsgi.Controller):
 
     def _format_quota_set(self, project_id, quota_set):
         """Convert the quota object to a result dict"""
@@ -56,7 +56,9 @@ class QuotaSetsController(object):
         return dict(quota_set=quota_set)
 
     def _validate_quota_limit(self, limit):
-        if not isinstance(limit, int):
+        try:
+            limit = int(limit)
+        except ValueError:
             msg = _("Quota limit must be specified as an integer value.")
             raise webob.exc.HTTPBadRequest(explanation=msg)
 
@@ -64,6 +66,8 @@ class QuotaSetsController(object):
         if limit < -1:
             msg = _("Quota limit must be -1 or greater.")
             raise webob.exc.HTTPBadRequest(explanation=msg)
+
+        return limit
 
     def _get_quotas(self, context, id, usages=False):
         values = QUOTAS.get_project_quotas(context, id, usages=usages)
@@ -96,10 +100,13 @@ class QuotaSetsController(object):
         context = req.environ['cinder.context']
         authorize_update(context)
         project_id = id
+        if not self.is_valid_body(body, 'quota_set'):
+            msg = _("Missing required element quota_set in request body.")
+            raise webob.exc.HTTPBadRequest(explanation=msg)
+
         for key in body['quota_set'].keys():
             if key in QUOTAS:
-                self._validate_quota_limit(body['quota_set'][key])
-                value = int(body['quota_set'][key])
+                value = self._validate_quota_limit(body['quota_set'][key])
                 try:
                     db.quota_update(context, project_id, key, value)
                 except exception.ProjectQuotaNotFound:

@@ -603,7 +603,8 @@ class NetAppDirectISCSIDriver(driver.ISCSIDriver):
         if curr_size_bytes != new_size_bytes:
             lun_geometry = self._get_lun_geometry(path)
             if (lun_geometry and lun_geometry.get("max_resize")
-                    and lun_geometry.get("max_resize") >= new_size_bytes):
+                    and int(lun_geometry.get("max_resize")) >=
+                    int(new_size_bytes)):
                 self._do_direct_resize(path, new_size_bytes)
             else:
                 self._do_sub_clone_resize(path, new_size_bytes)
@@ -781,6 +782,11 @@ class NetAppDirectCmodeISCSIDriver(NetAppDirectISCSIDriver):
         self.client.set_api_version(major, minor)
         self.ssc_vols = None
         self.stale_vols = set()
+
+    def check_for_setup_error(self):
+        """Check that the driver is working and can communicate."""
+        ssc_utils.check_ssc_api_permissions(self.client)
+        super(NetAppDirectCmodeISCSIDriver, self).check_for_setup_error()
 
     def _create_lun_on_eligible_vol(self, name, size, metadata,
                                     extra_specs=None):
@@ -1107,6 +1113,17 @@ class NetAppDirectCmodeISCSIDriver(NetAppDirectISCSIDriver):
     def refresh_ssc_vols(self, vols):
         """Refreshes ssc_vols with latest entries."""
         self.ssc_vols = vols
+
+    def delete_volume(self, volume):
+        """Driver entry point for destroying existing volumes."""
+        lun = self.lun_table.get(volume['name'])
+        netapp_vol = None
+        if lun:
+            netapp_vol = lun.get_metadata_property('Volume')
+        super(NetAppDirectCmodeISCSIDriver, self).delete_volume(volume)
+        if netapp_vol:
+            self._update_stale_vols(
+                volume=ssc_utils.NetAppVolume(netapp_vol, self.vserver))
 
 
 class NetAppDirect7modeISCSIDriver(NetAppDirectISCSIDriver):
